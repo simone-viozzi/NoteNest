@@ -1,4 +1,4 @@
-use actix_web::{delete, get, post, put, web, HttpResponse, Responder};
+use actix_web::{web, HttpResponse, Responder};
 
 /// Initializes note-related routes.
 pub fn init_routes(cfg: &mut web::ServiceConfig) {

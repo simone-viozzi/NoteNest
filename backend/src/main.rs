@@ -1,4 +1,4 @@
-use actix_web::{get, middleware::Logger, App, HttpServer, Responder, web};
+use actix_web::{get, middleware::Logger, App, HttpServer, Responder};
 use dotenvy::dotenv;
 use log::{error, info};
 
