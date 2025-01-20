@@ -2,19 +2,11 @@ use crate::routes;
 use actix_web::{test, App};
 use serial_test::serial;
 use sqlx::{Executor, PgPool};
-use uuid::Uuid;
 
-/// Shared database pool and Actix app context for the test module
-use actix_service::Service;
-
-// TODO fix tests!!
-
-
+/// Test context containing the database pool and app
 struct TestContext {
     pool: PgPool,
-    app: Service<test::TestRequest>,
 }
-
 
 /// Setup function to create the test database and initialize the app
 async fn setup() -> TestContext {
@@ -44,21 +36,12 @@ async fn setup() -> TestContext {
         .await
         .expect("Failed to apply migrations");
 
-    // Initialize the Actix app
-    let app = test::init_service(
-        App::new()
-            .app_data(actix_web::web::Data::new(pool.clone()))
-            .configure(routes::init_routes),
-    )
-    .await;
-
-    TestContext { pool, app }
+    TestContext { pool }
 }
 
 /// Teardown function to clean up the test database
 async fn teardown(ctx: TestContext) {
-    let TestContext { pool, .. } = ctx;
-    drop(pool); // Close all connections to the database
+    drop(ctx.pool); // Close all connections to the database
 
     let admin_url = "postgres://user:password@127.0.0.1:5432/postgres";
     let admin_pool = PgPool::connect(admin_url).await.unwrap();
@@ -76,13 +59,19 @@ async fn teardown(ctx: TestContext) {
 async fn test_create_note() {
     let ctx = setup().await;
 
-    // Use the API to create a note
+    let app = test::init_service(
+        App::new()
+            .app_data(actix_web::web::Data::new(ctx.pool.clone()))
+            .configure(routes::init_routes),
+    )
+    .await;
+
     let req = test::TestRequest::post()
         .uri("/notes")
         .set_json(&serde_json::json!({ "title": "Test Note" }))
         .to_request();
 
-    let resp = test::call_service(&ctx.app, req).await;
+    let resp = test::call_service(&app, req).await;
     assert_eq!(resp.status(), 200);
 
     let note = sqlx::query!("SELECT title FROM notes LIMIT 1")
@@ -100,18 +89,20 @@ async fn test_create_note() {
 async fn test_get_all_notes() {
     let ctx = setup().await;
 
-    // Use the API to create a note
-    let req = test::TestRequest::post()
-        .uri("/notes")
-        .set_json(&serde_json::json!({ "title": "First Note" }))
-        .to_request();
+    sqlx::query!("INSERT INTO notes (title) VALUES ($1)", "First Note")
+        .execute(&ctx.pool)
+        .await
+        .unwrap();
 
-    let resp = test::call_service(&ctx.app, req).await;
-    assert_eq!(resp.status(), 200);
+    let app = test::init_service(
+        App::new()
+            .app_data(actix_web::web::Data::new(ctx.pool.clone()))
+            .configure(routes::init_routes),
+    )
+    .await;
 
-    // Use the API to retrieve all notes
     let req = test::TestRequest::get().uri("/notes").to_request();
-    let resp = test::call_service(&ctx.app, req).await;
+    let resp = test::call_service(&app, req).await;
     assert_eq!(resp.status(), 200);
 
     let body: Vec<serde_json::Value> = test::read_body_json(resp).await;
@@ -123,33 +114,71 @@ async fn test_get_all_notes() {
 
 #[serial]
 #[actix_web::test]
+async fn test_get_note_by_id() {
+    let ctx = setup().await;
+
+    // Insert a test note
+    let note_id = sqlx::query!(
+        "INSERT INTO notes (title) VALUES ($1) RETURNING id",
+        "Test Note"
+    )
+    .fetch_one(&ctx.pool)
+    .await
+    .unwrap()
+    .id;
+
+    let app = test::init_service(
+        App::new()
+            .app_data(actix_web::web::Data::new(ctx.pool.clone()))
+            .configure(routes::init_routes),
+    )
+    .await;
+
+    // Send a GET request to retrieve the note by ID
+    let req = test::TestRequest::get()
+        .uri(&format!("/notes/{}", note_id))
+        .to_request();
+
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: serde_json::Value = test::read_body_json(resp).await;
+    assert_eq!(body["title"], "Test Note");
+
+    teardown(ctx).await;
+}
+
+#[serial]
+#[actix_web::test]
 async fn test_delete_note() {
     let ctx = setup().await;
 
-    // Use the API to create a note
-    let req = test::TestRequest::post()
-        .uri("/notes")
-        .set_json(&serde_json::json!({ "title": "Note to Delete" }))
-        .to_request();
+    // Insert a test note
+    let note_id = sqlx::query!(
+        "INSERT INTO notes (title) VALUES ($1) RETURNING id",
+        "Note to Delete"
+    )
+    .fetch_one(&ctx.pool)
+    .await
+    .unwrap()
+    .id;
 
-    let resp = test::call_service(&ctx.app, req).await;
-    assert_eq!(resp.status(), 200);
+    let app = test::init_service(
+        App::new()
+            .app_data(actix_web::web::Data::new(ctx.pool.clone()))
+            .configure(routes::init_routes),
+    )
+    .await;
 
-    let note_id: Uuid = test::read_body_json(resp).await["id"]
-        .as_str()
-        .unwrap()
-        .parse()
-        .unwrap();
-
-    // Use the API to delete the note
+    // Send a DELETE request to delete the note
     let req = test::TestRequest::delete()
         .uri(&format!("/notes/{}", note_id))
         .to_request();
 
-    let resp = test::call_service(&ctx.app, req).await;
+    let resp = test::call_service(&app, req).await;
     assert_eq!(resp.status(), 200);
 
-    // Verify the note was deleted
+    // Verify the note was deleted from the database
     let result = sqlx::query!("SELECT id FROM notes WHERE id = $1", note_id)
         .fetch_optional(&ctx.pool)
         .await
