@@ -1,10 +1,10 @@
 use serde::{Deserialize, Serialize};
-use sqlx::types::time::PrimitiveDateTime;
+use uuid::Uuid;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Note {
-    pub id: uuid::Uuid,
+    pub id: Uuid,
     pub title: String,
-    pub created_at: PrimitiveDateTime,
-    pub updated_at: PrimitiveDateTime,
+    pub created_at: chrono::NaiveDateTime,
+    pub updated_at: chrono::NaiveDateTime,
 }
